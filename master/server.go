@@ -73,7 +73,7 @@ var (
 	ownerRegexp   = regexp.MustCompile("^[A-Za-z][A-Za-z0-9_]{0,20}$")
 
 	useConnPool           = true // for test
-	enableDirectDeleteVol = true
+	enableDirectDeleteVol = false
 	gConfig               *clusterConfig
 )
 
@@ -406,7 +406,7 @@ func (m *Server) checkConfig(cfg *config.Config) (err error) {
 	}
 	m.config.volDeletionDentryThreshold = uint64(threshold)
 
-	enableDirectDeleteVol = cfg.GetBoolWithDefault(cfgEnableDirectDeleteVol, true)
+	enableDirectDeleteVol = cfg.GetBoolWithDefault(cfgEnableDirectDeleteVol, false)
 
 	m.config.cfgDataMediaType = uint32(cfg.GetInt64(cfgLegacyDataMediaType))
 	if m.config.cfgDataMediaType != 0 && !proto.IsValidMediaType(m.config.cfgDataMediaType) {
