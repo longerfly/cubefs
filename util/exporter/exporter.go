@@ -330,6 +330,9 @@ var (
 )
 
 func RecodCost(api string, costUs int64) {
+	if recoder == nil {
+		return
+	}
 	obLk.RLock()
 	ob := obMap[api]
 	obLk.RUnlock()
