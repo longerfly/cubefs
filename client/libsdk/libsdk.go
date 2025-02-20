@@ -1096,6 +1096,7 @@ func cfs_refreshsummary(id C.int64_t, path *C.char, goroutine_num C.int, unit *C
 	goroutineNum := int32(goroutine_num)
 	err = c.mw.RefreshSummary_ll(ino, goroutineNum, C.GoString(unit), C.GoString(split))
 	if err != nil {
+		log.LogErrorf("cfs_refreshsummary failed, path(%v) err(%v)", c.absPath(C.GoString(path)), err)
 		return errorToStatus(err)
 	}
 	return statusOK
@@ -1457,6 +1458,7 @@ func cfs_getsummary(id C.int64_t, path *C.char, summary *C.struct_cfs_summary_in
 
 	info, err := c.lookupPath(c.absPath(C.GoString(path)))
 	if err != nil {
+		log.LogErrorf("cfs_getsummary not found path(%v) err(%v)", c.absPath(C.GoString(path)), err)
 		return errorToStatus(err)
 	}
 
@@ -1480,6 +1482,7 @@ func cfs_getsummary(id C.int64_t, path *C.char, summary *C.struct_cfs_summary_in
 	goroutineNum := int32(goroutine_num)
 	summaryInfo, err := c.mw.GetSummary_ll(info.Inode, goroutineNum)
 	if err != nil {
+		log.LogErrorf("cfs_getsummary failed, path(%v) err(%v)", c.absPath(C.GoString(path)), err)
 		return errorToStatus(err)
 	}
 	if strings.ToLower(C.GoString(useCache)) != "false" {
