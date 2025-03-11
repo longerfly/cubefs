@@ -46,7 +46,6 @@ const (
 	EnableXattr
 	NearRead
 	EnablePosixACL
-	EnableSummary
 	EnableUnixPermission
 	RequestTimeout
 
@@ -146,7 +145,6 @@ func InitMountOptions(opts []MountOption) {
 	opts[ReqChanCnt] = MountOption{"reqChanCnt", "the request chan cnt for stream", "", int64(-1)}
 	opts[EnableXattr] = MountOption{"enableXattr", "Enable xattr support", "", false}
 	opts[EnablePosixACL] = MountOption{"enablePosixACL", "Enable posix ACL support", "", false}
-	opts[EnableSummary] = MountOption{"enableSummary", "Enable content summary", "", false}
 	opts[EnableUnixPermission] = MountOption{"enableUnixPermission", "Enable unix permission check(e.g: 777/755)", "", false}
 
 	opts[VolType] = MountOption{"volType", "volume type", "", int64(0)}
@@ -328,7 +326,6 @@ type MountOptions struct {
 	BcacheBatchCnt               int64
 	ReadThreads                  int64
 	WriteThreads                 int64
-	EnableSummary                bool
 	EnableUnixPermission         bool
 	NeedRestoreFuse              bool
 	MetaSendTimeout              int64
