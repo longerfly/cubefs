@@ -48,6 +48,7 @@ const (
 	UpdateSummaryRetry          = 3
 	SummaryKey                  = "DirStat"
 	UpdateAccessFileRetry       = 3
+	AccessStatKey               = "AccessStat"
 	AccessFileCountSsdKey       = "AccessFileCountSsd"
 	AccessFileSizeSsdKey        = "AccessFileSizeSsd"
 	AccessFileCountHddKey       = "AccessFileCountHdd"
@@ -2124,14 +2125,11 @@ func (mw *MetaWrapper) SetSummaryAndAccessFileInfo_ll(parentIno uint64, info *Su
 	log.LogDebugf("SetSummaryAndAccessFileInfo_ll: parentIno(%v) valueSummary(%v)  valueCountSsd(%v) valueSizeSsd(%v) valueCountHdd(%v) valueSizeHdd(%v) valueCountBlobStore(%v) valueSizeBlobStore(%v)",
 		parentIno, valueSummary, valueCountSsd, valueSizeSsd, valueCountHdd, valueSizeHdd, valueCountBlobStore, valueSizeBlobStore)
 
+	accessStat := valueCountSsd + "|" + valueSizeSsd + "|" + valueCountHdd + "|" + valueSizeHdd + "|" + valueCountBlobStore + "|" + valueSizeBlobStore
+
 	attrs := make(map[string]string)
 	attrs[SummaryKey] = valueSummary
-	attrs[AccessFileCountSsdKey] = valueCountSsd
-	attrs[AccessFileSizeSsdKey] = valueSizeSsd
-	attrs[AccessFileCountHddKey] = valueCountHdd
-	attrs[AccessFileSizeHddKey] = valueSizeHdd
-	attrs[AccessFileCountBlobStoreKey] = valueCountBlobStore
-	attrs[AccessFileSizeBlobStoreKey] = valueSizeBlobStore
+	attrs[AccessStatKey] = accessStat
 
 	for cnt := 0; cnt < UpdateAccessFileRetry; cnt++ {
 		err := mw.BatchSetXAttr_ll(parentIno, attrs)
@@ -2369,13 +2367,7 @@ func (mw *MetaWrapper) getDirAccessFileSummary(accessFileInfo *AccessFileInfo, i
 
 	var inodes []uint64
 	var keys []string
-	keys = append(keys,
-		AccessFileCountSsdKey,
-		AccessFileSizeSsdKey,
-		AccessFileCountHddKey,
-		AccessFileSizeHddKey,
-		AccessFileCountBlobStoreKey,
-		AccessFileSizeBlobStoreKey)
+	keys = append(keys, AccessStatKey)
 
 	for inode := range inodeCh {
 		inodes = append(inodes, inode)
@@ -2390,43 +2382,41 @@ func (mw *MetaWrapper) getDirAccessFileSummary(accessFileInfo *AccessFileInfo, i
 		}
 		inodes = inodes[0:0]
 		for _, xattrInfo := range xattrInfos {
-			if xattrInfo.XAttrs[AccessFileCountSsdKey] != "" {
-				accessList := strings.Split(xattrInfo.XAttrs[AccessFileCountSsdKey], ",")
+			if xattrInfo.XAttrs[AccessStatKey] != "" {
+				accessStatList := strings.Split(xattrInfo.XAttrs[AccessStatKey], "|")
+				accessCountSsdStat := accessStatList[0]
+				accessSizeSsdStat := accessStatList[1]
+				accessCountHddStat := accessStatList[2]
+				accessSizeHddStat := accessStatList[3]
+				accessCountBlobStoreStat := accessStatList[4]
+				accessSizeBlobStoreStat := accessStatList[5]
+
+				accessList := strings.Split(accessCountSsdStat, ",")
 				for i := 0; i < len(accessList); i++ {
 					val, _ := strconv.ParseInt(accessList[i], 10, 64)
 					accessCountSsd[i] += val
 				}
-			}
-			if xattrInfo.XAttrs[AccessFileSizeSsdKey] != "" {
-				accessList := strings.Split(xattrInfo.XAttrs[AccessFileSizeSsdKey], ",")
+				accessList = strings.Split(accessSizeSsdStat, ",")
 				for i := 0; i < len(accessList); i++ {
 					val, _ := strconv.ParseUint(accessList[i], 10, 64)
 					accessSizeSsd[i] += val
 				}
-			}
-			if xattrInfo.XAttrs[AccessFileCountHddKey] != "" {
-				accessList := strings.Split(xattrInfo.XAttrs[AccessFileCountHddKey], ",")
+				accessList = strings.Split(accessCountHddStat, ",")
 				for i := 0; i < len(accessList); i++ {
 					val, _ := strconv.ParseInt(accessList[i], 10, 64)
 					accessCountHdd[i] += val
 				}
-			}
-			if xattrInfo.XAttrs[AccessFileSizeHddKey] != "" {
-				accessList := strings.Split(xattrInfo.XAttrs[AccessFileSizeHddKey], ",")
+				accessList = strings.Split(accessSizeHddStat, ",")
 				for i := 0; i < len(accessList); i++ {
 					val, _ := strconv.ParseUint(accessList[i], 10, 64)
 					accessSizeHdd[i] += val
 				}
-			}
-			if xattrInfo.XAttrs[AccessFileCountBlobStoreKey] != "" {
-				accessList := strings.Split(xattrInfo.XAttrs[AccessFileCountBlobStoreKey], ",")
+				accessList = strings.Split(accessCountBlobStoreStat, ",")
 				for i := 0; i < len(accessList); i++ {
 					val, _ := strconv.ParseInt(accessList[i], 10, 64)
 					accessCountBlobStore[i] += val
 				}
-			}
-			if xattrInfo.XAttrs[AccessFileSizeBlobStoreKey] != "" {
-				accessList := strings.Split(xattrInfo.XAttrs[AccessFileSizeBlobStoreKey], ",")
+				accessList = strings.Split(accessSizeBlobStoreStat, ",")
 				for i := 0; i < len(accessList); i++ {
 					val, _ := strconv.ParseUint(accessList[i], 10, 64)
 					accessSizeBlobStore[i] += val
@@ -2442,43 +2432,41 @@ func (mw *MetaWrapper) getDirAccessFileSummary(accessFileInfo *AccessFileInfo, i
 	}
 	inodes = inodes[0:0]
 	for _, xattrInfo := range xattrInfos {
-		if xattrInfo.XAttrs[AccessFileCountSsdKey] != "" {
-			accessList := strings.Split(xattrInfo.XAttrs[AccessFileCountSsdKey], ",")
+		if xattrInfo.XAttrs[AccessStatKey] != "" {
+			accessStatList := strings.Split(xattrInfo.XAttrs[AccessStatKey], "|")
+			accessCountSsdStat := accessStatList[0]
+			accessSizeSsdStat := accessStatList[1]
+			accessCountHddStat := accessStatList[2]
+			accessSizeHddStat := accessStatList[3]
+			accessCountBlobStoreStat := accessStatList[4]
+			accessSizeBlobStoreStat := accessStatList[5]
+
+			accessList := strings.Split(accessCountSsdStat, ",")
 			for i := 0; i < len(accessList); i++ {
 				val, _ := strconv.ParseInt(accessList[i], 10, 64)
 				accessCountSsd[i] += val
 			}
-		}
-		if xattrInfo.XAttrs[AccessFileSizeSsdKey] != "" {
-			accessList := strings.Split(xattrInfo.XAttrs[AccessFileSizeSsdKey], ",")
+			accessList = strings.Split(accessSizeSsdStat, ",")
 			for i := 0; i < len(accessList); i++ {
 				val, _ := strconv.ParseUint(accessList[i], 10, 64)
 				accessSizeSsd[i] += val
 			}
-		}
-		if xattrInfo.XAttrs[AccessFileCountHddKey] != "" {
-			accessList := strings.Split(xattrInfo.XAttrs[AccessFileCountHddKey], ",")
+			accessList = strings.Split(accessCountHddStat, ",")
 			for i := 0; i < len(accessList); i++ {
 				val, _ := strconv.ParseInt(accessList[i], 10, 64)
 				accessCountHdd[i] += val
 			}
-		}
-		if xattrInfo.XAttrs[AccessFileSizeHddKey] != "" {
-			accessList := strings.Split(xattrInfo.XAttrs[AccessFileSizeHddKey], ",")
+			accessList = strings.Split(accessSizeHddStat, ",")
 			for i := 0; i < len(accessList); i++ {
 				val, _ := strconv.ParseUint(accessList[i], 10, 64)
 				accessSizeHdd[i] += val
 			}
-		}
-		if xattrInfo.XAttrs[AccessFileCountBlobStoreKey] != "" {
-			accessList := strings.Split(xattrInfo.XAttrs[AccessFileCountBlobStoreKey], ",")
+			accessList = strings.Split(accessCountBlobStoreStat, ",")
 			for i := 0; i < len(accessList); i++ {
 				val, _ := strconv.ParseInt(accessList[i], 10, 64)
 				accessCountBlobStore[i] += val
 			}
-		}
-		if xattrInfo.XAttrs[AccessFileSizeBlobStoreKey] != "" {
-			accessList := strings.Split(xattrInfo.XAttrs[AccessFileSizeBlobStoreKey], ",")
+			accessList = strings.Split(accessSizeBlobStoreStat, ",")
 			for i := 0; i < len(accessList); i++ {
 				val, _ := strconv.ParseUint(accessList[i], 10, 64)
 				accessSizeBlobStore[i] += val
