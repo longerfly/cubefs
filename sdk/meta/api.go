@@ -2140,6 +2140,28 @@ func (mw *MetaWrapper) SetSummaryAndAccessFileInfo_ll(parentIno uint64, info *Su
 	return
 }
 
+func (mw *MetaWrapper) SetColdVolumeSummaryInfo_ll(parentIno uint64, path string, info *SummaryInfo) {
+	mp := mw.getPartitionByInode(parentIno)
+	if mp == nil {
+		log.LogErrorf("SetColdVolumeSummaryInfo_ll: no such partition, inode(%v)", parentIno)
+		return
+	}
+
+	valueSummary := strconv.FormatInt(info.FilesTotal, 10) + "," +
+		strconv.FormatInt(info.Subdirs, 10) + "," +
+		strconv.FormatInt(info.FbytesTotal, 10)
+
+	log.LogDebugf("SetColdVolumeSummaryInfo_ll parentIno(%v) path(%v) GB(%v)", parentIno, path, info.FbytesTotal/(1024*1024*1024))
+
+	for cnt := 0; cnt < UpdateSummaryRetry; cnt++ {
+		err := mw.XAttrSet_ll(parentIno, []byte(SummaryKey), []byte(valueSummary))
+		if err == nil {
+			return
+		}
+	}
+	return
+}
+
 func (mw *MetaWrapper) InodeAccessTimeGet(ino uint64) (accessTime time.Time, err error) {
 	mp := mw.getPartitionByInode(ino)
 	if mp == nil {
@@ -2198,6 +2220,14 @@ func (mw *MetaWrapper) GetSummary_ll(parentIno uint64, goroutineNum int32) (Summ
 	var wg sync.WaitGroup
 	var currentGoroutineNum int32 = 0
 	inodeCh := make(chan uint64, ChannelLen)
+
+	view, err := mw.mc.AdminAPI().GetVolumeSimpleInfo(mw.volname)
+	if err != nil {
+		log.LogWarnf("GetSimpleVolView: get volume simple info fail: volume(%v) err(%v)", mw.volname, err)
+		return summaryInfo, errors.New("get volume simple info fail")
+	}
+	isColdVolume := view.VolStorageClass == proto.StorageClass_BlobStore
+
 	wg.Add(1)
 	atomic.AddInt32(&currentGoroutineNum, 1)
 	inodeCh <- parentIno
@@ -2207,7 +2237,7 @@ func (mw *MetaWrapper) GetSummary_ll(parentIno uint64, goroutineNum int32) (Summ
 		close(inodeCh)
 	}()
 
-	go mw.getDirSummary(&summaryInfo, inodeCh, errCh)
+	go mw.getDirSummary(&summaryInfo, inodeCh, errCh, isColdVolume)
 	for err := range errCh {
 		return summaryInfo, err
 	}
@@ -2524,7 +2554,7 @@ func (mw *MetaWrapper) getDirAccessFileSummary(accessFileInfo *AccessFileInfo, i
 	return
 }
 
-func getSummaryInfoFromXattrs(cluster string, volName string, xattrInfos []*proto.XAttrInfo, summaryInfo *SummaryInfo) {
+func getSummaryInfoFromXattrs(cluster string, volName string, isColdVolume bool, xattrInfos []*proto.XAttrInfo, summaryInfo *SummaryInfo) {
 	for _, xattrInfo := range xattrInfos {
 		if xattrInfo.XAttrs[SummaryKey] != "" {
 			var totalFiles, subdirs, totalFbytes, filesSsd, fbytesSsd, filesHdd, fbytesHdd, filesBlobStore, fbytesBlobStore int64
@@ -2534,8 +2564,11 @@ func getSummaryInfoFromXattrs(cluster string, volName string, xattrInfos []*prot
 				totalFiles, _ = strconv.ParseInt(summaryList[0], 10, 64)
 				subdirs, _ = strconv.ParseInt(summaryList[1], 10, 64)
 				totalFbytes, _ = strconv.ParseInt(summaryList[2], 10, 64)
-				filesSsd = totalFiles
-				fbytesSsd = totalFbytes
+				if !isColdVolume {
+					// for hot volume, old summary info is all ssd
+					filesSsd = totalFiles
+					fbytesSsd = totalFbytes
+				}
 			} else if len(summaryList) == 9 {
 				// new summary
 				totalFiles, _ = strconv.ParseInt(summaryList[0], 10, 64)
@@ -2556,17 +2589,19 @@ func getSummaryInfoFromXattrs(cluster string, volName string, xattrInfos []*prot
 			summaryInfo.FilesTotal += totalFiles
 			summaryInfo.Subdirs += subdirs
 			summaryInfo.FbytesTotal += totalFbytes
-			summaryInfo.FilesSsd += filesSsd
-			summaryInfo.FbytesSsd += fbytesSsd
-			summaryInfo.FilesHdd += filesHdd
-			summaryInfo.FbytesHdd += fbytesHdd
-			summaryInfo.FilesBlobStore += filesBlobStore
-			summaryInfo.FbytesBlobStore += fbytesBlobStore
+			if !isColdVolume {
+				summaryInfo.FilesSsd += filesSsd
+				summaryInfo.FbytesSsd += fbytesSsd
+				summaryInfo.FilesHdd += filesHdd
+				summaryInfo.FbytesHdd += fbytesHdd
+				summaryInfo.FilesBlobStore += filesBlobStore
+				summaryInfo.FbytesBlobStore += fbytesBlobStore
+			}
 		}
 	}
 }
 
-func (mw *MetaWrapper) getDirSummary(summaryInfo *SummaryInfo, inodeCh <-chan uint64, errch chan<- error) {
+func (mw *MetaWrapper) getDirSummary(summaryInfo *SummaryInfo, inodeCh <-chan uint64, errch chan<- error, isColdVolume bool) {
 	var inodes []uint64
 	var keys []string
 	for inode := range inodeCh {
@@ -2582,14 +2617,14 @@ func (mw *MetaWrapper) getDirSummary(summaryInfo *SummaryInfo, inodeCh <-chan ui
 		}
 		inodes = inodes[0:0]
 		keys = keys[0:0]
-		getSummaryInfoFromXattrs(mw.cluster, mw.volname, xattrInfos, summaryInfo)
+		getSummaryInfoFromXattrs(mw.cluster, mw.volname, isColdVolume, xattrInfos, summaryInfo)
 	}
 	xattrInfos, err := mw.BatchGetXAttr(inodes, keys)
 	if err != nil {
 		errch <- err
 		return
 	}
-	getSummaryInfoFromXattrs(mw.cluster, mw.volname, xattrInfos, summaryInfo)
+	getSummaryInfoFromXattrs(mw.cluster, mw.volname, isColdVolume, xattrInfos, summaryInfo)
 	close(errch)
 	return
 }
@@ -2873,6 +2908,126 @@ func (mw *MetaWrapper) refreshSummary(parentIno uint64, errCh chan<- error, wg *
 			go mw.refreshSummary(subdirIno, errCh, wg, currentGoroutineNum, true, goroutineNum, accessTimeCfg, limiter, readDirLimit, batchInodeSize)
 		} else {
 			mw.refreshSummary(subdirIno, errCh, wg, currentGoroutineNum, false, goroutineNum, accessTimeCfg, limiter, readDirLimit, batchInodeSize)
+		}
+	}
+}
+
+func (mw *MetaWrapper) RefreshColdVolumeSummary_ll(parentIno uint64, path string, goroutineNum int32, frequency int, readDirLimit int, batchInodeSize int) error {
+	if goroutineNum > MaxSummaryGoroutineNum {
+		goroutineNum = MaxSummaryGoroutineNum
+	}
+	if goroutineNum <= 0 {
+		goroutineNum = 1
+	}
+	var wg sync.WaitGroup
+	errch := make(chan error)
+	var currentGoroutineNum int32 = 0
+	wg.Add(1)
+	atomic.AddInt32(&currentGoroutineNum, 1)
+
+	var limiter *time.Ticker
+	if frequency > 0 {
+		limiter = time.NewTicker(time.Second / time.Duration(frequency))
+		defer limiter.Stop()
+	}
+
+	go mw.refreshColdVolumeSummary(parentIno, path, errch, &wg, &currentGoroutineNum, true, goroutineNum, limiter, readDirLimit, batchInodeSize)
+
+	go func() {
+		wg.Wait()
+		close(errch)
+	}()
+	for err := range errch {
+		return err
+	}
+
+	return nil
+}
+
+func (mw *MetaWrapper) refreshColdVolumeSummary(parentIno uint64, path string, errCh chan<- error, wg *sync.WaitGroup,
+	currentGoroutineNum *int32, newGoroutine bool, goroutineNum int32, limiter *time.Ticker, readDirLimit int, batchInodeSize int) {
+	defer func() {
+		if newGoroutine {
+			atomic.AddInt32(currentGoroutineNum, -1)
+			wg.Done()
+		}
+	}()
+
+	if limiter != nil {
+		<-limiter.C
+	}
+
+	if readDirLimit <= 0 {
+		readDirLimit = DefaultReaddirLimit
+	}
+	if batchInodeSize <= 0 {
+		batchInodeSize = BatchSize
+	}
+
+	var newSummaryInfo SummaryInfo
+
+	noMore := false
+	from := ""
+	var children []proto.Dentry
+	for !noMore {
+		batches, err := mw.ReadDirLimit_ll(parentIno, from, uint64(readDirLimit))
+		if err != nil {
+			log.LogErrorf("ReadDirLimit_ll: ino(%v) err(%v) from(%v)", parentIno, err, from)
+			errCh <- err
+			return
+		}
+
+		batchNr := uint64(len(batches))
+		if batchNr == 0 || (from != "" && batchNr == 1) {
+			noMore = true
+			break
+		} else if batchNr < uint64(readDirLimit) {
+			noMore = true
+		}
+		if from != "" {
+			batches = batches[1:]
+		}
+		children = append(children, batches...)
+		from = batches[len(batches)-1].Name
+	}
+
+	var inodeList []uint64
+	// var subdirsList []uint64
+	var subdirsList []proto.Dentry
+	for _, dentry := range children {
+		if proto.IsDir(dentry.Type) {
+			newSummaryInfo.Subdirs += 1
+			subdirsList = append(subdirsList, dentry)
+		} else {
+			newSummaryInfo.FilesTotal += 1
+			inodeList = append(inodeList, dentry.Inode)
+			if len(inodeList) < batchInodeSize {
+				continue
+			}
+			inodeInfos := mw.BatchInodeGet(inodeList)
+			for _, info := range inodeInfos {
+				newSummaryInfo.FbytesTotal += int64(info.Size)
+			}
+			inodeList = inodeList[0:0]
+		}
+	}
+	if len(inodeList) > 0 {
+		inodeInfos := mw.BatchInodeGet(inodeList)
+		for _, info := range inodeInfos {
+			newSummaryInfo.FbytesTotal += int64(info.Size)
+		}
+		inodeList = inodeList[0:0]
+	}
+
+	go mw.SetColdVolumeSummaryInfo_ll(parentIno, path, &newSummaryInfo)
+
+	for _, dentry := range subdirsList {
+		if atomic.LoadInt32(currentGoroutineNum) < goroutineNum {
+			wg.Add(1)
+			atomic.AddInt32(currentGoroutineNum, 1)
+			go mw.refreshColdVolumeSummary(dentry.Inode, path+"/"+dentry.Name, errCh, wg, currentGoroutineNum, true, goroutineNum, limiter, readDirLimit, batchInodeSize)
+		} else {
+			mw.refreshColdVolumeSummary(dentry.Inode, path+"/"+dentry.Name, errCh, wg, currentGoroutineNum, false, goroutineNum, limiter, readDirLimit, batchInodeSize)
 		}
 	}
 }
@@ -3186,4 +3341,103 @@ func (mw *MetaWrapper) GetAccessFileInfoSummary(parentPath string, parentIno uin
 
 	log.LogInfof("GetAccessInfoSummary_ll finish, AccessFileInfo(%v)", accessInfos)
 	return accessInfos, nil
+}
+
+func (mw *MetaWrapper) GetLeafDirs(parentPath string, parentIno uint64, goroutineNum int32) ([]string, error) {
+	if goroutineNum > MaxSummaryGoroutineNum {
+		goroutineNum = MaxSummaryGoroutineNum
+	}
+	if goroutineNum <= 0 {
+		goroutineNum = 1
+	}
+	var leafDirs []string
+	var wg sync.WaitGroup
+
+	var currentGoroutineNum int32 = 0
+
+	errCh := make(chan error)
+
+	leafCh := make(chan string, ChannelLen)
+	wg.Add(1)
+	atomic.AddInt32(&currentGoroutineNum, 1)
+
+	go mw.getLeafDirs(parentPath, parentIno, leafCh, errCh, &wg, &currentGoroutineNum, true, goroutineNum)
+
+	go func() {
+		wg.Wait()
+		close(leafCh)
+	}()
+
+	go func() {
+		for leaf := range leafCh {
+			leafDirs = append(leafDirs, leaf)
+		}
+		close(errCh)
+	}()
+
+	for err := range errCh {
+		return leafDirs, err
+	}
+
+	return leafDirs, nil
+}
+
+func (mw *MetaWrapper) getLeafDirs(parentPath string, parentIno uint64, leafCh chan<- string, errCh chan<- error, wg *sync.WaitGroup,
+	currentGoroutineNum *int32, newGoroutine bool, goroutineNum int32) {
+	defer func() {
+		if newGoroutine {
+			atomic.AddInt32(currentGoroutineNum, -1)
+			wg.Done()
+		}
+	}()
+
+	isLeaf := true
+	noMore := false
+	from := ""
+	var children []proto.Dentry
+
+	for !noMore {
+		batches, err := mw.ReadDirLimit_ll(parentIno, from, DefaultReaddirLimit)
+		if err != nil {
+			log.LogErrorf("getLeafDirs ReadDirLimit_ll ino(%v) err(%v) from(%v)", parentIno, err, from)
+			errCh <- err
+			return
+		}
+
+		batchNr := uint64(len(batches))
+		if batchNr == 0 || (from != "" && batchNr == 1) {
+			noMore = true
+			break
+		} else if batchNr < DefaultReaddirLimit {
+			noMore = true
+		}
+		if from != "" {
+			batches = batches[1:]
+		}
+		children = append(children, batches...)
+		from = batches[len(batches)-1].Name
+	}
+
+	for _, entry := range children {
+		if proto.IsDir(entry.Type) {
+			isLeaf = false
+			var fullPath string
+			if parentPath == "/" {
+				fullPath = "/" + entry.Name
+			} else {
+				fullPath = parentPath + "/" + entry.Name
+			}
+			if atomic.LoadInt32(currentGoroutineNum) < goroutineNum {
+				wg.Add(1)
+				atomic.AddInt32(currentGoroutineNum, 1)
+				go mw.getLeafDirs(fullPath, entry.Inode, leafCh, errCh, wg, currentGoroutineNum, true, goroutineNum)
+			} else {
+				mw.getLeafDirs(fullPath, entry.Inode, leafCh, errCh, wg, currentGoroutineNum, false, goroutineNum)
+			}
+		}
+	}
+	if isLeaf {
+		leafCh <- parentPath
+	}
+	return
 }
